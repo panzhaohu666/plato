@@ -5,11 +5,13 @@ from unittest import skipIf
 import socket
 
 def _clickhouse_available():
+    """Check if ClickHouse is reachable."""
     try:
-        s = socket.create_connection(("localhost", 8123), timeout=1)
+        import socket
+        s = socket.create_connection(("localhost", 8123), timeout=0.5)
         s.close()
         return True
-    except OSError:
+    except (OSError, TimeoutError):
         return False
 
 

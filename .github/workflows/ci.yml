@@ -40,7 +40,10 @@ jobs:
 
       - name: Build Rust engine
         working-directory: rust_engine
-        run: pip install maturin && maturin develop --release
+        run: |
+          pip install maturin
+          maturin build --release
+          pip install target/wheels/*.whl
 
       - name: Create DB schema
         run: |
