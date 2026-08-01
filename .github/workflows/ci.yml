@@ -1,0 +1,62 @@
+name: Plato CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+jobs:
+  django:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: hydra
+          POSTGRES_PASSWORD: hydra_pass_2024
+          POSTGRES_DB: hydra_db
+        ports: [5432:5432]
+      redis:
+        image: redis:7
+        ports: [6379:6379]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - name: Django checks
+        env:
+          DB_HOST: localhost
+          DB_NAME: hydra_db
+          DB_USER: hydra
+          DB_PASSWORD: hydra_pass_2024
+          REDIS_HOST: localhost
+          CH_HOST: localhost
+        run: |
+          python manage.py check
+          python manage.py migrate --noinput
+
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust tests
+        working-directory: rust_engine
+        run: cargo test
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "24" }
+      - name: Install & build
+        working-directory: frontend
+        run: npm install && npm run build
