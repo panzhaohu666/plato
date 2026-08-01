@@ -102,7 +102,8 @@ class DynamicModelManager:
     """
 
     def __init__(self):
-        self.registry = DynamicModelRegistry()
+        from .registry import registry
+        self.registry = registry
 
     # ----------------------------------------------------------
     # Public API
