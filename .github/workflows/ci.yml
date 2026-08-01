@@ -17,6 +17,11 @@ jobs:
           POSTGRES_PASSWORD: hydra_pass_2024
           POSTGRES_DB: hydra_db
         ports: [5432:5432]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
       redis:
         image: redis:7
         ports: [6379:6379]
@@ -30,7 +35,22 @@ jobs:
       - name: Install deps
         run: pip install -r requirements.txt
 
-      - name: Django checks
+      - name: Create DB schema
+        run: |
+          PGPASSWORD=hydra_pass_2024 psql -h localhost -U hydra -d hydra_db -c "CREATE SCHEMA IF NOT EXISTS dynamic_data AUTHORIZATION hydra;"
+
+      - name: Run migrations (django-tenants shared)
+        env:
+          DB_HOST: localhost
+          DB_NAME: hydra_db
+          DB_USER: hydra
+          DB_PASSWORD: hydra_pass_2024
+          REDIS_HOST: localhost
+          CH_HOST: localhost
+        run: |
+          python manage.py migrate_schemas --shared
+
+      - name: Django system check
         env:
           DB_HOST: localhost
           DB_NAME: hydra_db
@@ -40,7 +60,6 @@ jobs:
           CH_HOST: localhost
         run: |
           python manage.py check
-          python manage.py migrate --noinput
 
   rust:
     runs-on: ubuntu-latest
