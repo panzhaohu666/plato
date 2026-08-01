@@ -8,6 +8,9 @@ class TenantsConfig(AppConfig):
     verbose_name = "Tenants"
 
     def ready(self):
-        from .startup import create_demo_user
-        create_demo_user()
+        try:
+            from .startup import create_demo_user
+            create_demo_user()
+        except Exception:
+            pass  # Table doesn't exist yet (running migrations)
         import apps.tenants.signals
