@@ -26,7 +26,7 @@ frontend/dist/
 # IDE
 .idea/
 .vscode/
-.codegraph/
+.codegraph
 .omo/
 
 # OS
