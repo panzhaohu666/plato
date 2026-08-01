@@ -1,0 +1,609 @@
+================================================================================
+                    PLATO 项目完整 SOP 操作手册
+================================================================================
+                        版本: 0.1.0 | 2026-08-01
+================================================================================
+
+目录:
+  一、项目概述
+  二、环境要求
+  三、首次安装（从零到运行）
+  四、启动与停止
+  五、前端操作指南
+  六、API 接口文档
+  七、测试方法
+  八、项目结构说明
+  九、常见问题排查
+  十、部署到生产环境
+  十一、开发工作流
+
+================================================================================
+一、项目概述
+================================================================================
+
+Plato（柏拉图）是一个动态数据驱动的实时协同多维表格系统。
+
+核心功能:
+  1. 动态建表：前端定义 JSON 列结构 → 后端实时在 PostgreSQL 建表
+  2. 实时协同：Yjs CRDT 算法保证多人同时编辑不冲突
+  3. Rust 引擎：拓扑排序分析列公式依赖，检测循环引用
+  4. 冷热分离：ClickHouse 存储历史变更日志，PG 存热数据
+  5. 定时调度：用户可创建 Cron 定时任务自动验证/重算数据
+
+技术栈:
+  后端:   Django 6.0 + Django REST Framework
+  数据库: PostgreSQL 16 (主) + ClickHouse 24.8 (分析)
+  缓存:   Redis 7 (Channels + Celery)
+  协同:   y-py 0.6 (Yjs CRDT) + Django Channels 4
+  任务:   Celery 5 + django-celery-beat
+  引擎:   Rust 1.97 + PyO3
+  前端:   Vue 3.5 + Vite 8
+  容器:   Docker Compose
+
+GitHub: https://github.com/panzhaohu666/plato
+
+================================================================================
+二、环境要求
+================================================================================
+
+必需软件:
+  - Python 3.12+
+  - Node.js 24+
+  - Rust 1.97+ (含 cargo)
+  - PostgreSQL 16
+  - Redis 7
+  - Docker + Docker Compose
+
+可选:
+  - ClickHouse (通过 Docker 运行，无需本地安装)
+
+检查命令:
+  python3 --version
+  node --version
+  rustc --version
+  psql --version
+  redis-cli --version
+  docker --version
+
+================================================================================
+三、首次安装（从零到运行）
+================================================================================
+
+步骤 1: 克隆项目
+----------------------------------------
+  git clone https://github.com/panzhaohu666/plato.git
+  cd plato
+
+步骤 2: 创建 Python 虚拟环境
+----------------------------------------
+  python3 -m venv .venv
+  source .venv/bin/activate        # Linux/Mac
+  # .venv\Scripts\activate         # Windows
+  pip install -r requirements.txt
+
+步骤 3: 配置数据库
+----------------------------------------
+  # 创建 PostgreSQL 用户和数据库
+  sudo -u postgres psql -c "CREATE USER hydra WITH PASSWORD 'hydra_pass_2024' CREATEDB;"
+  sudo -u postgres psql -c "CREATE DATABASE hydra_db OWNER hydra;"
+  sudo -u postgres psql -d hydra_db -c "CREATE SCHEMA IF NOT EXISTS dynamic_data AUTHORIZATION hydra;"
+
+  # 运行 Django 迁移
+  python manage.py migrate
+
+步骤 4: 创建租户
+----------------------------------------
+  python manage.py shell
+  在 shell 中执行:
+    from apps.tenants.models import Tenant, Domain
+    t = Tenant.objects.create(schema_name='public', name='Plato')
+    Domain.objects.create(domain='localhost', tenant=t, is_primary=True)
+    Domain.objects.create(domain='127.0.0.1', tenant=t)
+    exit()
+
+步骤 5: 启动 Redis
+----------------------------------------
+  sudo systemctl start redis-server
+  sudo systemctl enable redis-server    # 开机自启
+
+步骤 6: 启动 ClickHouse (Docker)
+----------------------------------------
+  docker compose up -d clickhouse
+
+  # 创建事件日志表
+  docker exec hydra-clickhouse clickhouse-client -u hydra --password hydra_clickhouse_2024 -d hydra_analytics -q "
+  CREATE TABLE IF NOT EXISTS dynamic_table_event_log (
+      event_id UUID DEFAULT generateUUIDv4(),
+      tenant_schema LowCardinality(String),
+      table_name LowCardinality(String),
+      event_type Enum8('INSERT'=1,'UPDATE'=2,'DELETE'=3),
+      row_id String, old_data String DEFAULT '', new_data String,
+      changed_by String DEFAULT '', event_time DateTime64(3) DEFAULT now64(3)
+  ) ENGINE = MergeTree() PARTITION BY toYYYYMM(event_time)
+  ORDER BY (tenant_schema, table_name, event_time)
+  TTL toDateTime(event_time) + INTERVAL 90 DAY
+  "
+
+步骤 7: 编译 Rust 引擎
+----------------------------------------
+  cd rust_engine
+  maturin develop --release
+  cd ..
+
+  验证:
+    python -c "import rust_engine; print('Rust engine OK')"
+
+步骤 8: 安装前端依赖
+----------------------------------------
+  cd frontend
+  npm install
+  cd ..
+
+步骤 9: 配置环境变量 (可选，dev 模式有默认值)
+----------------------------------------
+  cp .env.example .env
+  # 生产环境需编辑 .env 修改密钥和密码
+
+================================================================================
+四、启动与停止
+================================================================================
+
+启动 Django 后端 (终端1):
+----------------------------------------
+  cd /path/to/plato
+  source .venv/bin/activate
+  python manage.py runserver 8000
+
+  输出示例:
+    System check identified no issues (0 silenced).
+    Starting development server at http://127.0.0.1:8000/
+
+启动 Vue 前端 (终端2):
+----------------------------------------
+  cd /path/to/plato/frontend
+  npx vite --host 0.0.0.0
+
+  输出示例:
+    VITE v8.x.x  ready in xxx ms
+    ➜  Local:   http://localhost:5173/
+
+打开浏览器:
+----------------------------------------
+  http://localhost:5173
+
+  登录账号:
+    用户名: admin
+    密码:   admin123
+
+停止服务:
+----------------------------------------
+  在终端按 Ctrl+C 停止各服务
+
+  停止 ClickHouse:
+    docker compose stop clickhouse
+
+================================================================================
+五、前端操作指南
+================================================================================
+
+登录后可见 5 个页面：
+
+1. 首页 (🏛️ Plato)
+   - 项目总览和技术栈展示
+
+2. 表管理 (📊 表管理)
+   - 创建动态表：
+     a. 填写表名（英文，如 sales_data）
+     b. 在文本框输入列定义，格式: 列名:类型（每行一个）
+        例如:
+          company:string
+          revenue:decimal
+          employees:integer
+     c. 点击"创建表"
+   - 查看已有表列表
+   - 点击表名进入数据视图
+   - 点击"归档"删除表
+
+3. 数据视图 (📋)
+   - 添加列：输入列名、选择类型、点击添加
+   - 插入行：填写各列值、点击插入
+   - 查看数据：自动显示为表格
+   - 删除行：点击每行末尾的"删除"
+
+4. 依赖画布 (🔗 画布)
+   - 添加节点：输入列名，选择依赖列（可选），点击添加
+   - 点击"分析依赖"：调用 Rust 引擎分析拓扑排序
+   - 如果存在循环依赖会显示警告
+   - 无循环则显示分层计算顺序
+
+5. 定时任务 (⏰ 定时)
+   - 创建任务：填写名称、目标表、任务类型、Cron 时间
+   - 查看已有任务列表
+   - 删除不需要的任务
+
+================================================================================
+六、API 接口文档
+================================================================================
+
+基础 URL: http://127.0.0.1:8000/api
+
+认证:
+  所有 API 需要 JWT Token，在请求头中添加:
+    Authorization: Bearer <token>
+
+6.1 认证接口
+----------------------------------------
+  POST /api/tenants/login/
+    Body: {"username":"admin","password":"admin123"}
+    返回: {"access":"...","refresh":"...","user":{"id":1,"username":"admin"}}
+
+  POST /api/tenants/register/
+    Body: {"username":"newuser","password":"pass123"}
+
+  POST /api/tenants/token/refresh/
+    Body: {"refresh":"..."}
+
+6.2 动态表接口
+----------------------------------------
+  POST /api/tables/
+    创建动态表
+    Body: {
+      "name": "my_table",
+      "display_name": "My Table",
+      "columns": [
+        {"name":"col1","col_type":"string","nullable":false},
+        {"name":"col2","col_type":"decimal","default":0}
+      ]
+    }
+    支持的列类型: string, text, integer, bigint, float, decimal,
+                  boolean, date, datetime, json, uuid
+
+  GET /api/tables/list/
+    列出所有动态表
+
+  GET /api/tables/{name}/
+    获取表元数据（列定义等）
+
+  DELETE /api/tables/{name}/archive/
+    归档（软删除）动态表
+
+  POST /api/tables/{name}/columns/
+    添加列
+    Body: {"name":"new_col","col_type":"integer","default":0}
+
+  DELETE /api/tables/{name}/columns/{col}/
+    软删除列（标记为 deleted，不真正 DROP）
+
+6.3 行操作接口
+----------------------------------------
+  POST /api/tables/{name}/rows/
+    插入行
+    Body: {"col1":"value1","col2":123}
+
+  GET /api/tables/{name}/rows/list/?limit=50&offset=0
+    查询行，支持动态过滤:
+    /api/tables/{name}/rows/list/?filter_col1=value
+
+  PUT /api/tables/{name}/rows/{id}/update/
+    更新行
+    Body: {"col1":"new_value"}
+
+  DELETE /api/tables/{name}/rows/{id}/delete/
+    删除行
+
+6.4 定时任务接口
+----------------------------------------
+  GET /api/tasks/schedules/
+    列出所有定时任务
+
+  POST /api/tasks/schedules/create/
+    创建定时任务
+    Body: {
+      "name":"Daily Check",
+      "task_type":"validate_table",
+      "table_name":"my_table",
+      "schedule_type":"crontab",
+      "schedule_config":{"minute":"0","hour":"2"}
+    }
+    任务类型: validate_table, recalculate_table, archive_old_rows
+
+  DELETE /api/tasks/schedules/{id}/delete/
+    删除定时任务
+
+  POST /api/tasks/schedules/{id}/toggle/
+    Body: {"enabled":false}
+
+6.5 依赖分析接口
+----------------------------------------
+  POST /api/deps/analyze/
+    Body: {
+      "columns": [
+        {"name":"total","dependencies":["price","quantity"]},
+        {"name":"tax","dependencies":["total"]},
+        {"name":"price"},
+        {"name":"quantity"}
+      ]
+    }
+    返回: {"order":[["price","quantity"],["total"],["tax"]],"has_cycle":false,"cycles":[]}
+
+6.6 WebSocket 接口
+----------------------------------------
+  WS /ws/table/{name}/
+  Yjs Sync Protocol (二进制):
+    消息类型 0x00: SyncStep1 (客户端 → 服务端，发送状态向量)
+    消息类型 0x01: SyncStep2 (服务端 → 客户端，返回缺失更新)
+    消息类型 0x02: SyncUpdate (双向，文档增量更新)
+
+================================================================================
+七、测试方法
+================================================================================
+
+7.1 快速验证（Django Shell 内）
+----------------------------------------
+  python manage.py shell
+
+  # 测试动态建表
+  from apps.dynamic_models.manager import dynamic_model_manager, ColumnDef, TableSchema
+  schema = TableSchema(name="test", columns=[ColumnDef(name="val", col_type="integer")])
+  model = dynamic_model_manager.create_table(schema)
+  model.objects.create(val=42)
+  print(model.objects.get(pk=1).val)  # 应输出 42
+
+  # 测试 Yjs
+  import y_py as Y
+  from apps.dynamic_models.yjs_service import yjs_manager
+  doc = Y.YDoc()
+  with doc.begin_transaction() as txn: doc.get_text("x").extend(txn, "hello")
+  yjs_manager.apply_update("test", Y.encode_state_as_update(doc))
+  yjs_manager.persist_to_db("test")
+
+  # 测试 Rust 引擎
+  import json, rust_engine
+  r = json.loads(rust_engine.resolve_dependencies(
+      json.dumps([{"name":"c","dependencies":["b"]},{"name":"b","dependencies":["a"]},{"name":"a"}])))
+  print(r["order"])  # 应输出 [["a"],["b"],["c"]]
+
+  # 测试 ClickHouse
+  from apps.dynamic_models.clickhouse_client import insert_event_log, query_event_log
+  insert_event_log("public","test","INSERT","1",{"val":1})
+  print(len(query_event_log("public","test",limit=1)))
+
+  # 测试 Celery 调度
+  from apps.dynamic_models.task_registry import task_scheduler
+  pt = task_scheduler.create_schedule("T","validate_table","test","crontab",{"minute":"0","hour":"3"})
+  print(task_scheduler.list_schedules("test"))
+  task_scheduler.delete_schedule(pt.pk)
+
+7.2 Rust 测试
+----------------------------------------
+  cd rust_engine
+  cargo test
+  # 输出: test result: ok. 5 passed
+
+7.3 Django 系统检查
+----------------------------------------
+  python manage.py check
+  # 输出: System check identified no issues (0 silenced).
+
+7.4 手动 API 测试 (用 curl)
+----------------------------------------
+  # 登录获取 token
+  TOKEN=$(curl -s -X POST http://127.0.0.1:8000/api/tenants/login/ \
+    -H "Content-Type: application/json" \
+    -d '{"username":"admin","password":"admin123"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['access'])")
+
+  # 列出表
+  curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/api/tables/list/
+
+  # 创建表
+  curl -X POST http://127.0.0.1:8000/api/tables/ \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer $TOKEN" \
+    -d '{"name":"api_test","columns":[{"name":"val","col_type":"integer"}]}'
+
+  # 插入数据
+  curl -X POST http://127.0.0.1:8000/api/tables/api_test/rows/ \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer $TOKEN" \
+    -d '{"val":99}'
+
+  # 查询数据
+  curl -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:8000/api/tables/api_test/rows/list/?limit=10"
+
+================================================================================
+八、项目结构说明
+================================================================================
+
+plato/
+├── apps/
+│   ├── dynamic_models/           # ★ 核心模块
+│   │   ├── manager.py            # DynamicModelManager — 运行时建表引擎
+│   │   ├── yjs_service.py        # YjsDocManager — CRDT 协同引擎
+│   │   ├── consumers.py          # WebSocket Yjs Sync Protocol 处理器
+│   │   ├── task_registry.py      # TaskScheduler — 动态 Celery 调度
+│   │   ├── expression_engine.py  # AST 白名单安全表达式计算
+│   │   ├── clickhouse_client.py  # ClickHouse 原生客户端（绕过 ORM）
+│   │   ├── models.py             # DynamicTableMetadata + DocumentState
+│   │   ├── views.py              # REST API 视图（21 个端点）
+│   │   ├── tasks.py              # Celery 异步任务（同步/广播/持久化）
+│   │   ├── registry.py           # 动态模型注册表（线程安全）
+│   │   ├── signals.py            # 行变更 → Celery 任务分发
+│   │   ├── exceptions.py         # 自定义异常类
+│   │   ├── urls.py               # URL 路由
+│   │   └── apps.py               # App 配置（启动时恢复模型）
+│   ├── tenants/                  # 多租户 + JWT 认证
+│   │   ├── models.py             # Tenant, User 模型
+│   │   ├── auth_views.py         # 登录/注册/Token 刷新
+│   │   ├── startup.py            # 自动创建 demo 用户
+│   │   └── urls.py               # 认证路由
+│   └── workflows/                # FSM 工作流引擎（预留）
+├── rust_engine/                  # ★ Rust PyO3 引擎
+│   └── src/lib.rs                # Kahn 拓扑排序 + 循环检测 + 分层分组
+├── frontend/                     # ★ Vue 3 前端
+│   └── src/
+│       ├── api.js                # API 客户端（JWT 自动注入）
+│       ├── App.vue               # 主布局 + 登录页
+│       └── pages/
+│           ├── HomePage.vue      # 首页
+│           ├── TableManager.vue  # 表管理
+│           ├── DataGrid.vue      # 数据视图
+│           ├── CanvasEditor.vue  # 依赖画布
+│           └── Schedules.vue     # 定时任务
+├── hydra/                        # Django 项目配置
+│   ├── settings.py               # 全局配置（DB/Redis/Channels/Celery）
+│   ├── urls.py                   # 根路由 + 首页 HTML
+│   ├── asgi.py                   # ASGI 配置（Channels + Daphne）
+│   ├── ws_urls.py                # WebSocket 路由
+│   ├── celery.py                 # Celery 配置
+│   └── routers.py                # DB 路由器（ClickHouse 排除）
+├── docker/                       # Docker 支持文件
+│   ├── nginx/nginx.conf          # Nginx 反向代理配置
+│   ├── django/Dockerfile         # Django 容器镜像
+│   └── clickhouse/init.sql       # ClickHouse 初始化 SQL
+├── docker-compose.yml            # 7 容器编排
+├── requirements.txt              # Python 依赖清单
+├── .env.example                  # 环境变量模板
+├── .gitignore                    # Git 忽略规则
+├── README.md                     # 项目文档
+├── LICENSE                       # MIT 许可证
+├── CHANGELOG.md                  # 版本更新日志
+├── CONTRIBUTING.md               # 贡献指南
+├── SECURITY.md                   # 安全策略
+└── manage.py                     # Django 管理入口
+
+================================================================================
+九、常见问题排查
+================================================================================
+
+问题 1: 启动 Django 报 "relation does not exist"
+----------------------------------------
+  原因: 数据库迁移未执行
+  解决: python manage.py migrate
+
+问题 2: 前端页面 404 "No tenant for hostname"
+----------------------------------------
+  原因: django-tenants 域名未配置
+  解决: 添加 127.0.0.1 域名到租户
+    python manage.py shell -c "
+    from apps.tenants.models import Tenant, Domain
+    Domain.objects.get_or_create(domain='127.0.0.1', tenant=Tenant.objects.first())
+    "
+
+问题 3: ClickHouse 连接失败
+----------------------------------------
+  原因: 容器未启动或端口冲突
+  解决:
+    docker compose up -d clickhouse
+    docker ps | grep clickhouse    # 确认状态为 healthy
+
+问题 4: Rust 引擎 import 失败
+----------------------------------------
+  原因: 未编译或编译产物版本不匹配
+  解决:
+    cd rust_engine
+    maturin develop --release
+    cd ..
+
+问题 5: 前端 API 请求返回 401
+----------------------------------------
+  原因: JWT Token 过期或未登录
+  解决: 刷新页面，重新登录 admin/admin123
+
+问题 6: 端口 8000 已被占用
+----------------------------------------
+  原因: 之前的 runserver 进程未关闭
+  解决:
+    lsof -ti:8000 | xargs kill -9
+    或换个端口: python manage.py runserver 8001
+
+问题 7: WebSocket 连接失败
+----------------------------------------
+  原因: runserver 是 WSGI 模式，不支持 WebSocket
+  解决: 使用 Daphne 启动 ASGI 模式
+    daphne -b 0.0.0.0 -p 8001 hydra.asgi:application
+
+问题 8: npm install 失败
+----------------------------------------
+  原因: Node.js 版本太低或网络问题
+  解决:
+    node --version    # 确认 >= 24
+    npm cache clean --force && npm install
+
+================================================================================
+十、部署到生产环境
+================================================================================
+
+10.1 使用 Docker Compose 部署
+----------------------------------------
+  # 构建 Django 镜像
+  docker compose build
+
+  # 启动全部服务
+  docker compose up -d
+
+  # 运行迁移
+  docker compose exec daphne python manage.py migrate
+
+  # 创建超级用户
+  docker compose exec daphne python manage.py shell -c "
+  from apps.tenants.models import Tenant, Domain, User
+  t = Tenant.objects.create(schema_name='public', name='Production')
+  Domain.objects.create(domain='your-domain.com', tenant=t, is_primary=True)
+  User.objects.create_superuser(username='admin', password='your-secure-password')
+  "
+
+10.2 生产环境检查清单
+----------------------------------------
+  [ ] 修改 SECRET_KEY 为随机字符串
+  [ ] 修改所有默认密码（DB、Redis、ClickHouse）
+  [ ] 设置 DEBUG = False
+  [ ] 配置 ALLOWED_HOSTS
+  [ ] 配置 CORS_ALLOWED_ORIGINS 为实际域名
+  [ ] 配置 HTTPS 证书（Let's Encrypt）
+  [ ] 设置 STATIC_ROOT 并运行 collectstatic
+  [ ] 配置数据库定期备份
+  [ ] 配置日志收集（ELK 或 Sentry）
+  [ ] 配置监控告警
+
+10.3 性能调优建议
+----------------------------------------
+  - PostgreSQL: 调整 shared_buffers, effective_cache_size
+  - Redis: 设置 maxmemory-policy allkeys-lru
+  - Celery: 根据 CPU 核数调整 --concurrency
+  - Daphne: 增加 worker 数量
+  - ClickHouse: 调整 merge 参数和 TTL 策略
+  - Nginx: 启用 gzip, 配置缓存
+
+================================================================================
+十一、开发工作流
+================================================================================
+
+日常开发流程:
+  1. git pull origin master            # 拉取最新代码
+  2. source .venv/bin/activate         # 激活虚拟环境
+  3. python manage.py runserver 8000   # 启动后端
+  4. cd frontend && npx vite           # 启动前端（另一个终端）
+  5. 修改代码 → 浏览器自动刷新
+  6. python manage.py check            # 提交前检查
+  7. cd rust_engine && cargo test      # Rust 测试
+  8. git add -A && git commit -m "feat: xxx"
+  9. git push
+
+添加新功能:
+  1. 后端 API → apps/dynamic_models/views.py 加视图
+  2. 注册路由 → apps/dynamic_models/urls.py 加 path
+  3. 前端调用 → frontend/src/api.js 加方法
+  4. 前端页面 → frontend/src/pages/ 新建 .vue
+
+添加新的定时任务类型:
+  1. apps/dynamic_models/task_registry.py: TASK_REGISTRY 加定义
+  2. apps/dynamic_models/tasks.py: execute_scheduled_task 加分支
+  3. 前端自动显示新类型
+
+添加新的列类型:
+  1. hydra/settings.py: DYNAMIC_TABLE_ALLOWED_TYPES 加映射
+  2. apps/dynamic_models/manager.py: _column_to_field 加映射
+
+================================================================================
+                            END OF DOCUMENT
+================================================================================
