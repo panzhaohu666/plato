@@ -1,6 +1,16 @@
 """Comprehensive test suite for Plato - all 5 levels."""
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.db import connection
+from unittest import skipIf
+import socket
+
+def _clickhouse_available():
+    try:
+        s = socket.create_connection(("localhost", 8123), timeout=1)
+        s.close()
+        return True
+    except OSError:
+        return False
 
 
 class PlatoBaseTestCase(TestCase):
@@ -123,6 +133,12 @@ class TestLevel3_RustEngine(TestCase):
 
 
 class TestLevel4_ClickHouse(PlatoBaseTestCase):
+
+    def setUp(self):
+        if not _clickhouse_available():
+            self.skipTest("ClickHouse not available in CI")
+        super().setUp()
+
     def test_insert_query(self):
         from apps.dynamic_models.clickhouse_client import insert_event_log, query_event_log
         insert_event_log("public","tdyn","INSERT","1",{"title":"CH"})

@@ -35,6 +35,13 @@ jobs:
       - name: Install deps
         run: pip install -r requirements.txt
 
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Rust engine
+        working-directory: rust_engine
+        run: pip install maturin && maturin develop --release
+
       - name: Create DB schema
         run: |
           PGPASSWORD=hydra_pass_2024 psql -h localhost -U hydra -d hydra_db -c "CREATE SCHEMA IF NOT EXISTS dynamic_data AUTHORIZATION hydra;"
