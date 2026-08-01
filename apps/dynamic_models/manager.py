@@ -167,27 +167,41 @@ class DynamicModelManager:
         self._validate_column(column, table_name=table_name)
         full_table = f'"{DYNAMIC_SCHEMA}"."{table_name}"'
 
-        with connection.cursor() as cursor:
-            sql_type = self._column_sql(column)
-            nullable = "" if column.nullable else "NOT NULL"
-            default_clause = self._default_clause(column)
-            sql = f"ALTER TABLE {full_table} ADD COLUMN \"{column.name}\" {sql_type} {nullable} {default_clause}"
-            cursor.execute(sql)
+        try:
+            with connection.cursor() as cursor:
+                sql_type = self._column_sql(column)
+                nullable = "" if column.nullable else "NOT NULL"
+                default_clause = self._default_clause(column)
+                sql = f"ALTER TABLE {full_table} ADD COLUMN \"{column.name}\" {sql_type} {nullable} {default_clause}"
+                cursor.execute(sql)
 
-        # Update metadata
-        self._add_column_metadata(table_name, column)
-        logger.info("Added column '%s' to table '%s'", column.name, table_name)
+            self._add_column_metadata(table_name, column)
+            logger.info("Added column '%s' to table '%s'", column.name, table_name)
+
+        except Exception as e:
+            logger.error("Failed to add column '%s' to '%s': %s", column.name, table_name, e)
+            raise DynamicTableError(
+                f"Failed to add column '{column.name}' to '{table_name}': {e}"
+            ) from e
 
     def drop_column(self, table_name: str, column_name: str):
-        """Soft-delete a column: rename it with _deleted_ prefix."""
-        with connection.cursor() as cursor:
-            full_table = f'"{DYNAMIC_SCHEMA}"."{table_name}"'
-            old_name = column_name
-            new_name = f"_deleted_{old_name}"
-            sql = f'ALTER TABLE {full_table} RENAME COLUMN "{old_name}" TO "{new_name}"'  # nosec
-            cursor.execute(sql)
+        """Soft-delete a column: rename it with _deleted_ prefix (no DROP, no lock)."""
+        try:
+            with connection.cursor() as cursor:
+                full_table = f'"{DYNAMIC_SCHEMA}"."{table_name}"'
+                old_name = column_name
+                new_name = f"_deleted_{old_name}"
+                sql = f'ALTER TABLE {full_table} RENAME COLUMN "{old_name}" TO "{new_name}"'
+                cursor.execute(sql)
 
-        self._soft_delete_column_metadata(table_name, column_name)
+            self._soft_delete_column_metadata(table_name, column_name)
+            logger.info("Soft-deleted column '%s' from table '%s'", column_name, table_name)
+
+        except Exception as e:
+            logger.error("Failed to drop column '%s' from '%s': %s", column_name, table_name, e)
+            raise DynamicTableError(
+                f"Failed to remove column '{column_name}' from '{table_name}': {e}"
+            ) from e
 
     def list_tables(self) -> list[dict]:
         """List all active dynamic tables with their columns."""
@@ -220,10 +234,12 @@ class DynamicModelManager:
 
     def _validate_schema(self, schema: TableSchema):
         """Full schema validation before touching the database."""
-        if not schema.name or not schema.name.replace("_", "").isalnum():
+        # Sanitize: only allow lowercase letters, numbers, underscores, max 63 chars
+        import re
+        if not re.match(r'^[a-z][a-z0-9_]{0,62}$', schema.name):
             raise SchemaValidationError(
                 f"Invalid table name: '{schema.name}'. "
-                "Use only lowercase letters, numbers, underscores."
+                "Use lowercase letters, numbers, underscores (max 63 chars, start with letter)."
             )
         if schema.name in RESERVED_COLUMNS:
             raise SchemaValidationError(
