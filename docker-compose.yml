@@ -1,0 +1,129 @@
+version: "3.9"
+
+services:
+  # ============================================================
+  # ClickHouse — analytical / cold-data store
+  # ============================================================
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8-alpine
+    container_name: hydra-clickhouse
+    restart: unless-stopped
+    ports:
+      - "8123:8123"   # HTTP interface
+      - "9000:9000"   # Native protocol
+    environment:
+      CLICKHOUSE_DB: hydra_analytics
+      CLICKHOUSE_USER: hydra
+      CLICKHOUSE_PASSWORD: hydra_clickhouse_2024
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ./docker/clickhouse/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================
+  # Redis — message broker + cache + Channels layer
+  # ============================================================
+  redis:
+    image: redis:7-alpine
+    container_name: hydra-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ============================================================
+  # Celery Worker — async task execution
+  # ============================================================
+  celery-worker:
+    build:
+      context: .
+      dockerfile: docker/django/Dockerfile
+    container_name: hydra-celery-worker
+    restart: unless-stopped
+    command: celery -A hydra worker -l info -Q default,high_priority --concurrency=4
+    volumes:
+      - .:/app
+    environment:
+      - DJANGO_SETTINGS_MODULE=hydra.settings
+      - CELERY_BROKER_URL=redis://hydra-redis:6379/0
+      - DATABASE_URL=postgres://hydra:hydra_pass_2024@host.docker.internal:5432/hydra_db
+    depends_on:
+      redis:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # ============================================================
+  # Celery Beat — periodic task scheduler
+  # ============================================================
+  celery-beat:
+    build:
+      context: .
+      dockerfile: docker/django/Dockerfile
+    container_name: hydra-celery-beat
+    restart: unless-stopped
+    command: celery -A hydra beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    volumes:
+      - .:/app
+    environment:
+      - DJANGO_SETTINGS_MODULE=hydra.settings
+      - CELERY_BROKER_URL=redis://hydra-redis:6379/0
+      - DATABASE_URL=postgres://hydra:hydra_pass_2024@host.docker.internal:5432/hydra_db
+    depends_on:
+      redis:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # ============================================================
+  # Daphne — ASGI server for WebSocket (Channels)
+  # ============================================================
+  daphne:
+    build:
+      context: .
+      dockerfile: docker/django/Dockerfile
+    container_name: hydra-daphne
+    restart: unless-stopped
+    command: daphne -b 0.0.0.0 -p 8001 hydra.asgi:application
+    ports:
+      - "8001:8001"
+    volumes:
+      - .:/app
+    environment:
+      - DJANGO_SETTINGS_MODULE=hydra.settings
+      - DATABASE_URL=postgres://hydra:hydra_pass_2024@host.docker.internal:5432/hydra_db
+    depends_on:
+      redis:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # ============================================================
+  # Nginx — reverse proxy & static file serving
+  # ============================================================
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: hydra-nginx
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./staticfiles:/static:ro
+    depends_on:
+      - daphne
+
+volumes:
+  clickhouse_data:
+  redis_data:

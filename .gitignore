@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+*.so
+
+# Django
+*.log
+db.sqlite3
+/media/
+/staticfiles/
+
+# Environment
+.env
+
+# Rust
+rust_engine/target/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# IDE
+.idea/
+.vscode/
+.codegraph/
+.omo/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker volumes
