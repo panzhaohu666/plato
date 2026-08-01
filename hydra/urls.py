@@ -203,8 +203,32 @@ def index(request):
     return HttpResponse(INDEX_HTML)
 
 
+def health(request):
+    from django.db import connections
+    from django_redis import get_redis_connection
+    db_ok = True
+    redis_ok = True
+    try:
+        connections["default"].cursor()
+    except Exception:
+        db_ok = False
+    try:
+        get_redis_connection("default").ping()
+    except Exception:
+        redis_ok = False
+
+    from django.http import JsonResponse
+    return JsonResponse({
+        "status": "ok" if (db_ok and redis_ok) else "degraded",
+        "database": "ok" if db_ok else "error",
+        "redis": "ok" if redis_ok else "error",
+        "version": "0.1.0",
+    })
+
+
 urlpatterns = [
     path("", index, name="index"),
+    path("health/", health, name="health"),
     path("api/", include("apps.dynamic_models.urls")),
     path("api/tenants/", include("apps.tenants.urls")),
     path("api/graphql", include("apps.dynamic_models.graphql_urls")),

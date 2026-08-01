@@ -6,7 +6,9 @@
         <p class="gray" style="text-align:center;margin-bottom:20px">动态数据协同系统</p>
         <input v-model="loginForm.username" placeholder="用户名" style="margin-bottom:8px" @keyup.enter="doLogin" />
         <input v-model="loginForm.password" type="password" placeholder="密码" style="margin-bottom:12px" @keyup.enter="doLogin" />
-        <button @click="doLogin" :disabled="loading" style="width:100%;margin-bottom:8px">{{ loading ? '登录中...' : '登录' }}</button>
+        <button @click="doLogin" :disabled="loading" style="width:100%;margin-bottom:8px">
+          {{ loading ? '登录中...' : '登录' }}
+        </button>
         <p class="gray" style="text-align:center;font-size:11px">Demo: admin / admin123</p>
         <p v-if="loginMsg" :class="loginOk ? 'green' : 'red'" style="text-align:center;margin-top:8px;font-size:13px">{{ loginMsg }}</p>
       </div>
@@ -23,11 +25,16 @@
       </nav>
       <main><router-view /></main>
     </div>
+
+    <!-- Global toast notification -->
+    <div v-if="toast.visible" :class="['toast', toast.type]" @click="toast.visible=false">
+      {{ toast.message }}
+    </div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, provide, reactive } from 'vue'
 import { api, getToken } from './api.js'
 
 const user = ref(null)
@@ -35,6 +42,15 @@ const loading = ref(false)
 const loginForm = ref({ username: 'admin', password: 'admin123' })
 const loginMsg = ref('')
 const loginOk = ref(true)
+
+const toast = reactive({ visible: false, message: '', type: 'info' })
+
+function showToast(message, type = 'info') {
+  toast.message = message; toast.type = type; toast.visible = true
+  setTimeout(() => toast.visible = false, 3000)
+}
+
+provide('toast', showToast)
 
 onMounted(() => {
   const saved = localStorage.getItem('plato_user')
@@ -99,4 +115,11 @@ pre{background:#0d1117;padding:12px;border-radius:6px;font-size:12px;overflow:au
 .login-card{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:32px;width:360px}
 .login-card input{width:100%}
 .login-card button{width:100% !important}
+.toast{position:fixed;bottom:24px;right:24px;padding:12px 20px;border-radius:8px;font-size:13px;color:#fff;cursor:pointer;z-index:9999;animation:slideIn .3s ease}
+.toast.info{background:#1e3a5f}
+.toast.error{background:#7f1d1d}
+.toast.success{background:#064e3b}
+@keyframes slideIn{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}
+.spinner{display:inline-block;width:16px;height:16px;border:2px solid #30363d;border-top:2px solid #58a6ff;border-radius:50%;animation:spin .6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
 </style>

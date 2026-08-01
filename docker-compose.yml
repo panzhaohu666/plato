@@ -116,6 +116,20 @@ services:
       - "host.docker.internal:host-gateway"
 
   # ============================================================
+  # Frontend — Vue 3 SPA (multi-stage build + nginx serve)
+  # ============================================================
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend/Dockerfile
+    container_name: hydra-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - daphne
+
+  # ============================================================
   # Nginx — reverse proxy & static file serving
   # ============================================================
   nginx:
