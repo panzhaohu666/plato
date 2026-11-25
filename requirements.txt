@@ -2,7 +2,7 @@ amqp==5.3.1
 annotated-types==0.8.0
 asgiref==3.12.1
 attrs==26.1.0
-autobahn==26.7.1
+autobahn==26.10.1
 Automat==25.4.16
 backports.zstd==1.6.0
 billiard==4.2.4
