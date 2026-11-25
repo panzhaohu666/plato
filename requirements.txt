@@ -28,7 +28,7 @@ django-fsm==3.0.1
 django-tenants==3.10.2
 django-timezone-field==7.2.2
 django_celery_results==2.6.0
-djangorestframework==3.17.1
+djangorestframework==3.18.2
 djangorestframework_simplejwt==5.5.1
 graphql-core==3.2.11
 gunicorn==26.0.0
